@@ -1,203 +1,258 @@
-# Oil–Wave Coupled Slick Model (2D x–y, time-dependent)
+# Oil--Wave Coupled Slick Model (2D x--y, time-dependent)
 
-A simulation-oriented, Eulerian oil-slick model with two-way coupling between an evolving surface oil film and a simplified two-band wave field (small waves + large waves). The model is designed to be **implementable on a structured (possibly stretched) 2D grid** without requiring a full spectral wave model, while still capturing the key feedback loop:
+A simulation-ready, Eulerian oil-slick model with **two-way coupling**
+between an evolving surface oil film and a simplified **two-band wave
+field**:
 
-- wind drives waves  
-- oil damps waves  
-- waves advect/drift oil  
-- oil thickness evolves (advection + diffusion + gravity spreading + source)  
-- thickness feeds back into wave damping
+-   **Small waves**
+-   **Large waves**
 
----
+The model captures a closed physical feedback loop:
 
-## Overview
+-   wind drives waves\
+-   oil damps waves\
+-   waves advect and drift oil\
+-   oil thickness evolves (advection + diffusion + gravity spreading +
+    source)\
+-   oil thickness feeds back into wave damping
 
-We simulate a 2D horizontal domain \((x,y)\) forward in time \(t\) with **four evolving fields**:
+The goal is to retain **physical interpretability** while remaining
+**numerically implementable** without a full spectral wave model.
 
-1. **Oil thickness**: \(T(x,y,t)\)
-2. **Oil velocity**: \(\mathbf{U}_o(x,y,t)\)
-3. **Small-wave amplitude**: \(A_s(x,y,t)\)
-4. **Large-wave amplitude**: \(A_L(x,y,t)\)
+------------------------------------------------------------------------
 
-This is a **closed loop** model: wave amplitudes affect oil transport; oil thickness affects wave growth/damping.
+# 1. Model overview
 
----
+We simulate a horizontal 2-D domain `(x, y)` forward in time `t` with
+four evolving fields:
 
-## Governing equations (conceptual PDE set)
+1.  **Oil thickness** `T(x, y, t)`
+2.  **Oil velocity** `Uo(x, y, t)`
+3.  **Small-wave amplitude** `As(x, y, t)`
+4.  **Large-wave amplitude** `AL(x, y, t)`
 
-### 1) Small-wave amplitude \(A_s(x,y,t)\)
+This forms a **fully coupled oil--wave system**.
 
-Small waves are advected downwind at their group speed and evolve due to wind input and damping:
+------------------------------------------------------------------------
 
-\[
-\frac{\partial A_s}{\partial t} + \mathbf{c}_{g,s}\cdot\nabla A_s
-= I_s(U_{\text{eff}}) - D_{s,0}A_s - D_{s,\text{oil}}(T)A_s
-\]
 
-- **Wind input** (simple quadratic dependence on effective wind):
-\[
-I_s(U_{\text{eff}}) = C_s\,U_{\text{eff}}^2
-\]
-- **Background damping**:
-\[
-D_{s,0}A_s
-\]
-- **Oil-induced damping** (strong for small waves):
-\[
-D_{s,\text{oil}}(T)=D_{s,\max}\left(1-e^{-T/T_s}\right)
-\]
-where \(T_s\) is a characteristic thickness for strong short-wave suppression.
 
----
 
-### 2) Large-wave amplitude \(A_L(x,y,t)\)
 
-Large waves are advected at their group speed, grow from wind **only if small waves exist**, and are damped by water + oil:
+# 2. Governing equations (conceptual form)
 
-\[
-\frac{\partial A_L}{\partial t} + \mathbf{c}_{g,L}\cdot\nabla A_L
-= I_L(U_{\text{eff}},A_s) - D_{L,0}A_L - D_{L,\text{oil}}(T)A_L
-\]
+## 2.1 Small waves `As`
 
-- **Wind input enabled by small waves**:
-\[
-I_L(U_{\text{eff}},A_s)=C_L\,U_{\text{eff}}^2\,G(A_s)
-\]
-with an enabling function \(G(A_s)\) such that:
-- if \(A_s\approx 0\), then \(G(A_s)\approx 0\) (no long-wave growth)
-- if \(A_s\) is appreciable, \(G(A_s)\to 1\)
+Advection + wind growth − damping:
 
-- **Oil-induced damping** (weaker; requires thicker slick):
-\[
-D_{L,\text{oil}}(T)=D_{L,\max}\left(1-e^{-T/(mT_s)}\right),\qquad m\gg 1
-\]
+    dAs/dt + cg_s · grad(As)
+      = Cs * Ueff^2
+      - Ds0 * As
+      - Ds_oil(T) * As
 
----
+Oil damping example:
 
-### 3) Oil velocity \(\mathbf{U}_o(x,y,t)\)
+    Ds_oil(T) = Ds_max * (1 − exp(−T / Ts))
 
-Oil moves with background current plus wave-driven drift, with an optional “surfing” correction when the oil layer is thick relative to wave orbital amplitude:
+Small waves are **strongly suppressed** once thickness approaches `Ts`.
 
-\[
-\mathbf{U}_o = \mathbf{U}_{\text{curr}} + \mathbf{U}_{\text{Stokes}}(A_L) + \gamma(\chi)\,\mathbf{c}_{p,L}
-\]
+------------------------------------------------------------------------
 
-- **Stokes drift** from large waves (deep-water form; direction along long-wave direction).
-- **Thickness-dependent surfing factor**:
-\[
-\chi=\frac{T}{a_L+\varepsilon},\quad
-\gamma(\chi)\in[0,1]
-\]
-so:
-- thin slick \((\chi\ll1)\Rightarrow \gamma\approx 0\)
-- thick layer \((\chi\gg1)\Rightarrow \gamma\to 1\)
+## 2.2 Large waves `AL`
 
-**No direct wind term** is applied to \(\mathbf{U}_o\); wind acts via waves and currents.
+Large waves grow from wind **only when small waves exist**:
 
----
 
-### 4) Oil thickness \(T(x,y,t)\)
 
-Conservative thickness evolution with advection, diffusion (including wave-enhanced mixing), gravity-driven spreading, and injection source:
 
-\[
-\frac{\partial T}{\partial t} + \nabla\cdot(\mathbf{U}_oT)
-= \nabla\cdot\left(D_T(A_L)\nabla T\right)
-+ \nabla\cdot\left(C_{\text{grav}}\nabla T^3\right)
-+ S(x,y,t)
-\]
+    dAL/dt + cg_L · grad(AL)
+      = CL * Ueff^2 * G(As)
+      - DL0 * AL
 
-- **Wave-enhanced diffusion** example:
-\[
-D_T(A_L)=D_0+\kappa_{\text{wave}}A_L^2
-\]
-- **Gravity-driven spreading** (thin-film / Fay-type nonlinear flux): \(\nabla\cdot(C_{\text{grav}}\nabla T^3)\)
-- **Source**: localized injection at \((x_0,y_0)\), starting at \(t=0\)
 
-This thickness feeds back into the wave equations through \(D_{s,\text{oil}}(T)\) and \(D_{L,\text{oil}}(T)\).
 
----
 
-## Simulation loop
 
-A recommended two-phase workflow:
 
-### Spin-up (build steady wave field)
-For \(t\in[-T_{\text{spin}},0)\):
-- set \(T=0\)
-- evolve \(A_s, A_L\) under prescribed wind/current until steady or quasi-steady
 
-### Coupled run
-For \(t\ge 0\), at each step:
-1. update **small waves** \(A_s^{n+1}\)
-2. update **large waves** \(A_L^{n+1}\)
-3. compute **oil velocity** \(\mathbf{U}_o^{n+1}\)
-4. update **thickness** \(T^{n+1}\) (advection + diffusion + spreading + source)
-5. update wave damping terms using new \(T^{n+1}\)
-6. advance time
+      - DL_oil(T) * AL
 
----
 
-## Discretization (finite volume on stretched grid)
 
-Oil thickness is discretized on a structured 2D grid with known monotone cell-center coordinates:
-- \(x_i\), \(y_j\) cell centers  
-- \(\Delta x_i \approx x_{i+1}-x_i\), \(\Delta y_j \approx y_{j+1}-y_j\)  
-- cell area \(A_{ij}=\Delta x_i\Delta y_j\)  
-- unknowns stored cell-centered: \(T_{ij}, A_{s,ij}, A_{L,ij}, U_{x,ij}, U_{y,ij}\)
+Oil damping is weaker:
 
-Thickness equation is advanced with a conservative FV balance:
-- **advection**: high-order upwind-biased reconstruction at faces
-- **diffusion + gravity spreading**: second-order central gradients on non-uniform spacing
-- **source**: inject thickness in the nearest cell to \((x_0,y_0)\)
+    DL_oil(T) = DL_max * (1 − exp(−T / (m * Ts)))
 
-Non-negativity is enforced after each update:
-\[
-T^{n+1}\leftarrow \max(T^{n+1},0)
-\]
+with `m >> 1`, meaning **long waves require thicker oil** to be damped.
 
----
+------------------------------------------------------------------------
 
-## Stability notes
 
-Practical constraints:
-- CFL for advection:
-\[
-\Delta t < \min\left(\frac{\Delta x}{|U_x|},\frac{\Delta y}{|U_y|}\right)
-\]
-- diffusion stability (if explicit diffusion is used) will be more restrictive; consider semi-implicit diffusion if needed.
-- small-wave dynamics are “fast”; explicit is usually fine with a sufficiently small \(\Delta t\)
 
----
 
-## Code layout (current)
+## 2.3 Oil velocity `Uo`
 
-From the repo root (example):
 
-- `main.py` — simulation driver / orchestration  
-- `state.py` — state container(s): fields, params, grid  
-- `time_stepping.py` — integrators / update sequence  
-- `grid_builder.py` — stretched grid construction  
-- `io_utils.py` — I/O, parameter loading, outputs  
-- `small_waves.py` — \(A_s\) evolution terms  
-- `large_waves.py` — \(A_L\) evolution terms  
-- `oil_velocity.py` — closure for \(\mathbf{U}_o\) from waves + current  
 
-> Folders `DoNotUpload/`, `old_code_versions/`, `run_outputs/` (and typically `__pycache__/`) are excluded via `.gitignore`.
 
----
 
-## Validation and background
 
-This repo is inspired by (and can be cross-checked against) classic semi-empirical spreading/drift models and Eulerian oil spill frameworks, including:
 
-- Fay spreading stages (gravity–inertia, gravity–viscous, surface tension–viscous)
-- Mackay et al. style tuning for spreading area evolution
-- Two-layer / Eulerian approaches such as MOSM (e.g., Tkalich and coauthors) that emphasize compatibility with hydrodynamic models and low numerical diffusion requirements for accurate advection.
+Oil motion combines:
 
-The wave side is intentionally simplified (two amplitude bands) but conceptually aligned with common wave-growth/dissipation ideas used in operational wave modeling.
 
----
+
+
+-   background current\
+-   Stokes drift from large waves\
+-   optional **surfing** when oil is thick relative to wave orbital
+    amplitude
+
+```{=html}
+<!-- -->
+```
+    Uo = Ucurr + Ustokes(AL) + gamma(chi) * c_phase
+
+Thickness ratio:
+
+    chi = T / (aL + eps)
+
+
+
+Behavior:
+
+
+
+
+
+
+
+
+
+-   `chi << 1` → `gamma ≈ 0` → pure Stokes drift\
+-   `chi >> 1` → `gamma → 1` → partial phase-speed transport
+
+**No direct wind drag on oil** --- wind acts only via waves and
+currents.
+
+------------------------------------------------------------------------
+
+## 2.4 Oil thickness `T`
+
+Conservative transport with diffusion, gravity spreading, and source:
+
+
+
+
+
+
+    dT/dt + div(Uo * T)
+      = div(DT(AL) * grad(T))
+      + div(Cgrav * grad(T^3))
+
+
+      + S(x, y, t)
+
+Wave-enhanced diffusion example:
+
+    DT(AL) = D0 + k_wave * AL^2
+
+Gravity spreading uses a **nonlinear thin-film (Fay-type) term**.
+
+Oil thickness feeds back into **both wave damping terms**, closing the
+loop.
+
+------------------------------------------------------------------------
+
+
+
+
+# 3. Simulation loop
+
+
+
+
+
+
+
+
+## 3.1 Wave spin-up (`t < 0`)
+
+-   Set `T = 0`
+-   Evolve `As` and `AL` under wind/current
+-   Reach steady or quasi-steady wave field
+
+## 3.2 Coupled evolution (`t ≥ 0`)
+
+
+
+
+
+Each timestep:
+
+
+
+
+1.  Update **small waves**
+2.  Update **large waves**
+3.  Compute **oil velocity**
+4.  Update **oil thickness**
+5.  Apply **wave damping from thickness**
+6.  Advance time
+
+------------------------------------------------------------------------
+
+# 4. Discretization
+
+-   **Finite-volume method** on structured or stretched grid\
+-   Cell-centered storage for `T`, `As`, `AL`, `Ux`, `Uy`\
+-   **High-order upwind** advection\
+-   **Second-order central** diffusion & gravity spreading\
+-   Localized **source injection** at spill location\
+-   Enforced **non-negative thickness**
+
+
+------------------------------------------------------------------------
+
+# 5. Stability constraints
+
+Advection CFL:
+
+    dt < min(dx / |Ux|, dy / |Uy|)
+
+
+
+
+
+
+
+
+Explicit diffusion may impose a **stronger timestep restriction**.
+
+Small-wave dynamics evolve fastest → timestep must respect this scale.
+
+------------------------------------------------------------------------
+
+# 6. Code structure
+
+    main.py            # simulation driver
+    state.py           # grid, parameters, fields
+    time_stepping.py   # timestep integration
+    grid_builder.py    # stretched grid construction
+    io_utils.py        # configuration & outputs
+    small_waves.py     # As evolution
+    large_waves.py     # AL evolution
+    oil_velocity.py    # Uo closure
+
+Excluded via `.gitignore`:
+
+    DoNotUpload/
+    old_code_versions/
+    run_outputs/
+    __pycache__/
+
+------------------------------------------------------------------------
+
 
 ## References (starting list)
 
@@ -221,11 +276,14 @@ Oil slick spreading / drift / two-layer approaches:
 - Stolzenbach et al. (1977), Warluzel & Benque (1981)
 - Tkalich (2000), Tkalich et al. (1999) — MOSM
 
-*(You can refine this into BibTeX later.)*
+
+
+
+
 
 ---
+
 
 ## License
 
 This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See `LICENSE` for details.
-
